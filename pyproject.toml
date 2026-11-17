@@ -1,0 +1,9 @@
+[project]
+name = "intelscraperstudio"
+version = "0.1.0"
+description = "Turns raw camera and drone footage into edits, posts and blog stories, with your approval."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["engine/tests"]
+pythonpath = ["engine"]
