@@ -263,13 +263,16 @@ def analyze_clip(clip_id: int) -> dict:
         return {"id": clip_id, "error": str(e)}
 
 
-def group_similar(shoot_id: int, max_bits: int = 8, max_gap_s: float = 900) -> int:
-    """Mark near-identical takes so only the best of each group is kept automatically."""
+def group_similar(shoot_id: int, kind: str = "video", max_bits: int | None = None, max_gap_s: float | None = None) -> int:
+    """Mark near-identical takes (video) or burst frames (photo) so only the best of each group is kept."""
     from .ingest import to_dt
+    max_bits = max_bits if max_bits is not None else (8 if kind == "video" else 12)
+    max_gap_s = max_gap_s if max_gap_s is not None else (900 if kind == "video" else 20)
+    word = "take" if kind == "video" else "frame"
     with db.session() as con:
-        cs = db.rows(con.execute("SELECT id, src_name, dhash, score, verdict, reasons, recorded_at, camera FROM clips "
-                                 "WHERE shoot_id=? AND status='analyzed' AND kind='video' AND dhash IS NOT NULL",
-                                 (shoot_id,)))
+        cs = db.rows(con.execute("SELECT id, src_name, dhash, score, verdict, reasons, recorded_at, camera, metrics FROM clips "
+                                 "WHERE shoot_id=? AND status='analyzed' AND kind=? AND dhash IS NOT NULL "
+                                 "AND companion_of IS NULL ORDER BY recorded_at", (shoot_id, kind)))
         parent = {c["id"]: c["id"] for c in cs}
 
         def find(x):
@@ -293,10 +296,10 @@ def group_similar(shoot_id: int, max_bits: int = 8, max_gap_s: float = 900) -> i
         for g in groups.values():
             if len(g) < 2:
                 continue
-            g.sort(key=lambda c: -(c["score"] or 0))
+            g.sort(key=lambda c: -((c["score"] or 0) + 0.3 * ((c["metrics"] or {}).get("impact") or 0)))
             best = g[0]
             for c in g[1:]:
-                note = f"Very similar to {best['src_name']}, which scored higher"
+                note = f"Very similar to {best['src_name']}, a stronger {word}"
                 reasons = [r for r in (c["reasons"] or []) if not r.startswith("Very similar to")]
                 verdict = "review" if c["verdict"] == "keep" else c["verdict"]
                 new_reasons = reasons[:2] + [note] if verdict == "reject" else [note] + reasons[:2]
@@ -307,18 +310,24 @@ def group_similar(shoot_id: int, max_bits: int = 8, max_gap_s: float = 900) -> i
 
 
 def analyze_many(ids: list[int], progress: Progress = _noop) -> list[dict]:
-    out = []
-    for i, cid in enumerate(ids):
-        with db.session() as con:
-            r = con.execute("SELECT src_name, kind FROM clips WHERE id=?", (cid,)).fetchone()
-        if not r or r["kind"] != "video":
-            continue
-        progress(i, len(ids), f"Analyzing {r['src_name']} ({i + 1} of {len(ids)})")
-        out.append(analyze_clip(cid))
+    from . import photos, sorting
     with db.session() as con:
         shoots = {r[0] for r in con.execute(
             f"SELECT DISTINCT shoot_id FROM clips WHERE id IN ({','.join('?' * len(ids))})", ids)} if ids else set()
     for s in shoots:
-        group_similar(s)
+        sorting.pair_companions(s)  # JPEG halves of RAW+JPEG pairs aren't analyzed twice
+    out = []
+    for i, cid in enumerate(ids):
+        with db.session() as con:
+            r = con.execute("SELECT src_name, kind, companion_of FROM clips WHERE id=?", (cid,)).fetchone()
+        if not r or r["companion_of"]:
+            continue
+        progress(i, len(ids), f"Analyzing {r['src_name']} ({i + 1} of {len(ids)})")
+        out.append(analyze_clip(cid) if r["kind"] == "video" else photos.analyze_photo(cid))
+    for s in shoots:
+        progress(len(ids), len(ids), "Finding duplicates and sorting into Stock and Portfolio")
+        group_similar(s, "video")
+        group_similar(s, "photo")
+        sorting.classify_shoot(s)
     progress(len(ids), len(ids), "Analysis done")
     return out

@@ -45,7 +45,12 @@ Shoot, then plug in the card. Everything after that is automated up to one appro
 - [x] Thumbnails and 540p preview files (NVENC when available)
 - [x] Review screen with keyboard culling and user overrides
 - [x] Music folder import: tempo, beats, octave correction, energy, sections, estimated vibe
-- [x] Settings: library and backup folders, verify copies, previews, shoot gap
+- [x] Photo scoring for RAW (LibRaw) and JPEG: subject focus, light, noise, horizon tilt, visual impact, bursts
+- [x] RAW+JPEG pairs handled as one photo
+- [x] Sorting into **Stock** and **Portfolio & print** with reasons, print sizes and overrides (S / P keys)
+- [x] Collection export (hard links) with details.csv and stock-agency CSV
+- [x] Optional auto-import when a card is plugged in
+- [x] Settings: library and backup folders, verify copies, previews, shoot gap, auto-import, portfolio share, collections folder
 - [x] Test suite on synthetic cards and songs
 
 ### 2. Cutting room: next
@@ -71,11 +76,13 @@ Shoot, then plug in the card. Everything after that is automated up to one appro
 
 - [ ] Titles, descriptions, hashtags and blog drafts via the Claude API, in the user's caption voice
 - [ ] Blog/portfolio publishing (WordPress, Ghost, or a generated static site)
-- [ ] Photo culling for ARW/DNG/JPG
 
 ## Known limits in step 1
 
-- **Scoring thresholds** are tuned on synthetic test clips. They will need a pass on real A7C and Mavic 3 footage.
+- **Scoring thresholds** are tuned on synthetic test clips and photos. They will need a pass on real A7C and Mavic 3 footage and RAW files.
+- **"Visual impact"** is rule-based (color, contrast, attention, thirds), so Portfolio picks are a starting point. Overriding with P is expected. A learned aesthetic model, or Claude reviewing the shortlist, could replace it later.
+- **RAW decoding** is tested on generated DNG files. Real Sony ARW files take the faster embedded-preview path, which hasn't run on a real ARW here yet.
+- **Stock exports** contain the originals. Titles and keywords in `stock_metadata.csv` are left blank until the writing step (step 4).
 - **Vibe estimates** are rule-based. Correcting a song's vibe in the Music library is the intended workflow.
 - **Tempo:** a very slow song (about 62 BPM or less) can still read at double speed. Use the ½× button.
 - **Timestamps:** DJI clips store local clock time without a timezone, so the PC's timezone is used to place them on the timeline.

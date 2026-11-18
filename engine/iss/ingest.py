@@ -210,6 +210,19 @@ def import_source(source: str | Path, progress: Progress = _noop) -> dict:
     for i, f in enumerate(todo):
         progress(i, len(todo), f"Reading {f.name}")
         infos.append((f, media.inspect(f)))
+    # RAW+JPEG pairs (DSC01234.ARW + DSC01234.JPG) share one capture time, so they land in the same shoot.
+    pairs: dict[tuple[str, str], list[dict]] = {}
+    for f, info in infos:
+        if info["kind"] == "photo":
+            pairs.setdefault((str(f.parent), f.stem.upper()), []).append(info)
+    for group in pairs.values():
+        dated = [i for i in group if not i["meta"].get("time_from_file")]
+        if len(group) > 1 and dated:
+            for i in group:
+                if i["meta"].get("time_from_file"):
+                    i["recorded_at"] = dated[0]["recorded_at"]
+                    i.setdefault("lat", dated[0].get("lat"))
+                    i.setdefault("lon", dated[0].get("lon"))
     infos.sort(key=lambda x: to_dt(x[1]["recorded_at"]))
 
     new_ids: list[int] = []
@@ -245,13 +258,14 @@ def import_source(source: str | Path, progress: Progress = _noop) -> dict:
         with db.session() as con:
             cur = con.execute(
                 """INSERT INTO clips(shoot_id, hash, src_name, src_size, path, backup_path, kind, camera,
-                   color_profile, duration, width, height, fps, codec, bit_depth, recorded_at, lat, lon, meta, status)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   color_profile, duration, width, height, fps, codec, bit_depth, recorded_at, lat, lon, meta, status,
+                   megapixels)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (shoot_id, digest, f.name, size, str(dest), str(dests[1]) if backup else None, info["kind"],
                  info["camera"], info.get("color_profile"), info.get("duration"), info.get("width"),
                  info.get("height"), info.get("fps"), info.get("codec"), info.get("bit_depth"),
                  info["recorded_at"], info.get("lat"), info.get("lon"), db.dumps(info.get("meta", {})),
-                 "imported" if info["kind"] == "video" else "analyzed"))
+                 "imported", info.get("megapixels")))
             new_ids.append(cur.lastrowid)
     with db.session() as con:  # a shoot created only for duplicates would be empty
         con.execute("DELETE FROM shoots WHERE id NOT IN (SELECT DISTINCT shoot_id FROM clips WHERE shoot_id IS NOT NULL)")

@@ -30,6 +30,12 @@ def _defaults() -> dict:
         "music_folders": [],
         # Clips recorded more than this many hours apart start a new shoot.
         "shoot_gap_hours": 6,
+        # Start importing as soon as a camera card with new files is plugged in.
+        "auto_import": False,
+        # Share of a shoot's qualifying photos picked for Portfolio & print (the best ones).
+        "portfolio_share": 0.15,
+        # Where exported Stock / Portfolio collections go. Empty = <library>/Collections.
+        "collections_root": "",
     }
 
 

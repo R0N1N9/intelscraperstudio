@@ -12,7 +12,7 @@ const ICON = {
   spark: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.2 6.6L21 11l-6.8 2.4L12 20l-2.2-6.6L3 11l6.8-2.4z"/></svg>',
 };
 
-const state = { status: null, shoots: [], tracks: [], jobs: [], sources: [], shootId: null, clips: [], sel: 0, filter: 'all', vibe: 'all', playing: null };
+const state = { status: null, shoots: [], tracks: [], jobs: [], sources: [], shootId: null, clips: [], sel: 0, filter: 'all', media: 'all', vibe: 'all', playing: null };
 
 // ------------------------------------------------------------ helpers
 async function api(path, opts = {}) {
@@ -109,16 +109,16 @@ render.studio = () => {
       <div class="txt"><b>${esc(src.camera)} · ${esc(src.label)}</b><small>${src.new_files ? `${src.new_files} new files · ${fmtBytes(src.new_bytes)}` : 'Everything on this card is already imported'} · <span class="mono">${esc(src.path)}</span></small></div>
       ${src.new_files ? `<button class="btn primary" data-import="${esc(src.path)}">Import &amp; analyze</button>` : '<span class="chip">Up to date</span>'}
     </div>`).join('') || `
-    <div class="card-detect"><div class="ico">${ICON.card}</div><div class="txt"><b>No camera card detected</b><small>Insert your A7C or Mavic 3 card and it shows up here. You can also import any folder of clips.</small></div></div>`;
+    <div class="card-detect"><div class="ico">${ICON.card}</div><div class="txt"><b>No camera card detected</b><small>Insert your A7C or Mavic 3 card and it shows up here. Photos and clips are both imported, scored and sorted into Stock and Portfolio.</small></div></div>`;
   const vibeCounts = Object.entries(VIBES).map(([k, n]) => `<span class="chip">${n} <b>${analyzed.filter((t) => t.vibe === k).length}</b></span>`).join('');
   v.innerHTML = `
     <div class="head"><div class="t"><span class="eyebrow">${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</span><h1>Studio</h1></div>
       <span class="muted" style="font-size:13px">Import footage and music. Nothing is posted anywhere without your approval.</span></div>
     <div class="studio-top">
       <div class="panel pad stack">
-        <div class="head"><h2>Import</h2><span class="chip good"><span class="dot" style="margin-right:0"></span>Watching for cards</span></div>
+        <div class="head"><h2>Import</h2>${s?.config?.auto_import ? '<span class="chip good"><span class="dot" style="margin-right:0"></span>Auto-import on</span>' : '<a class="chip" href="#settings" title="Import as soon as a card is plugged in">Auto-import off</a>'}</div>
         ${sources}
-        <div><button class="btn" data-pick-footage>${ICON.folder}Import a folder of clips…</button></div>
+        <div><button class="btn" data-pick-footage>${ICON.folder}Import a folder…</button></div>
         <div class="sep"></div>
         <div class="card-detect">
           <div class="ico">${ICON.music}</div>
@@ -130,11 +130,11 @@ render.studio = () => {
       <div class="panel pad stack"><div class="t"><span class="eyebrow">Processing</span><h2>Jobs</h2></div><div id="jobList"></div></div>
     </div>
     <div class="stack">
-      <div class="head"><h2>Your shoots</h2>${state.shoots.length ? `<a class="btn ghost sm" href="#review">Review clips</a>` : ''}</div>
-      ${state.shoots.length ? `<div class="shoots">${state.shoots.map(shootCard).join('')}</div>` : `<div class="empty"><b>No shoots yet</b><span>Import a card or a folder of clips. intelscraperstudio copies and backs them up, then scores every clip.</span></div>`}
+      <div class="head"><h2>Your shoots</h2>${state.shoots.length ? `<a class="btn ghost sm" href="#review">Review &amp; sort</a>` : ''}</div>
+      ${state.shoots.length ? `<div class="shoots">${state.shoots.map(shootCard).join('')}</div>` : `<div class="empty"><b>No shoots yet</b><span>Import a card or a folder. intelscraperstudio copies and backs everything up, scores every photo and clip, and sorts the best into Stock and Portfolio.</span></div>`}
     </div>`;
   $$('[data-import]', v).forEach((b) => (b.onclick = () => startImport(b.dataset.import)));
-  $('[data-pick-footage]', v).onclick = async () => { const p = await pickFolder('Import a folder of clips', 'Choose a card, or any folder. Subfolders are included.'); if (p) startImport(p); };
+  $('[data-pick-footage]', v).onclick = async () => { const p = await pickFolder('Import a folder', 'Choose a card, or any folder of photos and clips. Subfolders are included.'); if (p) startImport(p); };
   $('[data-pick-music]', v).onclick = async () => { const p = await pickFolder('Import a music folder', 'Choose the folder with songs you want to edit to.'); if (p) startMusic(p); };
   $$('[data-shoot]', v).forEach((b) => (b.onclick = () => (location.hash = 'review/' + b.dataset.shoot)));
   drawJobs();
@@ -142,12 +142,12 @@ render.studio = () => {
 
 function shootCard(s) {
   return `<button class="panel shoot" data-shoot="${s.id}">
-    <div class="frame">${s.cover ? `<img src="/api/clips/${s.cover}/thumb" alt="" loading="lazy">` : '<div class="ph">Analyzing…</div>'}<span class="badge b-br">${plural(s.clips, 'clip')}${s.photos ? ` · ${plural(s.photos, 'photo')}` : ''}</span></div>
+    <div class="frame">${s.cover ? `<img src="/api/clips/${s.cover}/thumb" alt="" loading="lazy">` : '<div class="ph">Analyzing…</div>'}<span class="badge b-br">${[s.photos && plural(s.photos, 'photo'), s.clips && plural(s.clips, 'clip')].filter(Boolean).join(' · ')}</span></div>
     <div class="body">
       <b>${esc(s.name)}</b>
-      <div class="dim" style="font-size:12px">${fmtDate(s.started_at)} · ${esc(s.cameras.join(' · '))} · ${s.minutes} min</div>
+      <div class="dim" style="font-size:12px">${fmtDate(s.started_at)} · ${esc(s.cameras.join(' · '))}${s.clips ? ` · ${s.minutes} min` : ''}</div>
       ${s.lat != null ? `<span class="coord">${coord(s.lat, s.lon)}</span>` : ''}
-      <div class="meta">${s.pending ? `<span class="chip amber">${s.pending} analyzing</span>` : ''}<span class="chip good">${plural(s.keep, 'keeper')}</span>${s.review ? `<span class="chip amber">${plural(s.review, 'close call')}</span>` : ''}<span class="chip">${s.reject} rejected</span></div>
+      <div class="meta">${s.pending ? `<span class="chip amber">${s.pending} analyzing</span>` : ''}${s.portfolio ? `<span class="chip amber">${s.portfolio} portfolio</span>` : ''}${s.stock ? `<span class="chip info">${s.stock} stock</span>` : ''}<span class="chip good">${plural(s.keep, 'keeper')}</span>${s.review ? `<span class="chip">${plural(s.review, 'close call')}</span>` : ''}</div>
     </div></button>`;
 }
 
@@ -165,50 +165,65 @@ function summary(j) {
   const r = j.result || {};
   if (j.kind === 'music') return `${r.analyzed} songs analyzed${r.unchanged ? `, ${r.unchanged} unchanged` : ''}${r.errors ? `, ${r.errors} could not be read` : ''}`;
   if (j.kind === 'import') return `${r.imported} new files imported and analyzed${r.skipped ? `, ${r.skipped} already in the library` : ''}`;
+  if (j.kind === 'export') return `${plural(r.items, 'item')} collected in ${r.folder}`;
   return j.message;
 }
 
-// ------------------------------------------------------------ review
+// ------------------------------------------------------------ review & sort
 async function loadClips() {
   if (!state.shootId && state.shoots.length) state.shootId = state.shoots[0].id;
   if (!state.shootId) { state.clips = []; return; }
-  state.clips = (await api(`/shoots/${state.shootId}/clips`)).filter((c) => c.kind === 'video');
+  state.clips = await api(`/shoots/${state.shootId}/clips`);
 }
-const visible = () => state.clips.filter((c) => state.filter === 'all' || c.final === state.filter);
+const ofMedia = () => state.clips.filter((c) => state.media === 'all' || c.kind === state.media);
+const matches = (c, f) => f === 'all' || (f === 'stock' ? c.stock : f === 'portfolio' ? c.portfolio : c.final === f);
+const visible = () => ofMedia().filter((c) => matches(c, state.filter));
+const FILTERS = [['all', 'All'], ['portfolio', 'Portfolio & print'], ['stock', 'Stock'], ['keep', 'Keepers'], ['review', 'Close calls'], ['reject', 'Rejected']];
 
 render.review = async () => {
   const v = $('#v-review');
   if (!state.shoots.length) {
-    v.innerHTML = `<div class="head"><div class="t"><h1>Review clips</h1></div></div><div class="empty"><b>Nothing to review yet</b><span>Import a card or folder from the Studio screen first.</span><a class="btn primary" href="#studio">Go to Studio</a></div>`;
+    v.innerHTML = `<div class="head"><div class="t"><h1>Review &amp; sort</h1></div></div><div class="empty"><b>Nothing to review yet</b><span>Import a card or folder from the Studio screen first.</span><a class="btn primary" href="#studio">Go to Studio</a></div>`;
     return;
   }
   await loadClips();
   const shoot = state.shoots.find((s) => s.id === state.shootId) || state.shoots[0];
-  const n = (f) => state.clips.filter((c) => c.final === f).length;
-  const list = visible();
-  state.sel = Math.min(state.sel, Math.max(0, list.length - 1));
+  const photos = state.clips.filter((c) => c.kind === 'photo').length;
+  const videos = state.clips.length - photos;
+  if (state.media === 'photo' && !photos) state.media = 'all';
+  if (state.media === 'video' && !videos) state.media = 'all';
+  const base = ofMedia();
+  const n = (f) => base.filter((c) => matches(c, f)).length;
+  state.sel = Math.min(state.sel, Math.max(0, visible().length - 1));
   v.innerHTML = `
     <div class="head">
       <div class="t"><span class="eyebrow">${fmtDate(shoot.started_at)} · ${esc(shoot.cameras.join(' + '))}${shoot.lat != null ? ' · ' + coord(shoot.lat, shoot.lon) : ''}</span>
         <h1 id="shootName" title="Click to rename" style="cursor:text">${esc(shoot.name)}</h1></div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <select class="input" id="shootSel" aria-label="Shoot" style="width:auto">${state.shoots.map((s) => `<option value="${s.id}" ${s.id === shoot.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
-        <div class="seg" id="filters">
-          <button data-f="all" class="${state.filter === 'all' ? 'on' : ''}">All <span class="mono dim">${state.clips.length}</span></button>
-          <button data-f="keep" class="${state.filter === 'keep' ? 'on' : ''}">Keepers <span class="mono dim">${n('keep')}</span></button>
-          <button data-f="review" class="${state.filter === 'review' ? 'on' : ''}">Close calls <span class="mono dim">${n('review')}</span></button>
-          <button data-f="reject" class="${state.filter === 'reject' ? 'on' : ''}">Rejected <span class="mono dim">${n('reject')}</span></button>
-        </div>
+        <button class="btn" data-export="stock" ${shoot.stock ? '' : 'disabled'}>Export stock <span class="mono dim">${shoot.stock}</span></button>
+        <button class="btn primary" data-export="portfolio" ${shoot.portfolio ? '' : 'disabled'}>Export portfolio <span class="mono">${shoot.portfolio}</span></button>
       </div>
     </div>
-    <div class="ai-note">${ICON.spark}<span>Every clip was scored on focus, steadiness and light. ${n('keep') === 1 ? '1 looks like a keeper' : n('keep') + ' look like keepers'} and ${n('reject')} ${n('reject') === 1 ? 'was' : 'were'} rejected (shaky, soft, accidental or a weaker duplicate). ${n('review') ? `Check the ${plural(n('review'), 'close call')} and override` : 'Override'} anything you disagree with.
-      <span class="keys" style="margin-left:6px"><span><kbd>K</kbd> keep</span><span><kbd>X</kbd> reject</span><span><kbd>U</kbd> undo</span><span><kbd>←</kbd><kbd>→</kbd> move</span><span><kbd>Space</kbd> play best moment</span></span></span></div>
+    <div class="row-sw" style="flex-wrap:wrap;justify-content:flex-start">
+      ${photos && videos ? `<div class="seg" id="mediaSeg">${[['all', `All ${state.clips.length}`], ['photo', `Photos ${photos}`], ['video', `Clips ${videos}`]].map(([k, l]) => `<button data-m="${k}" class="${state.media === k ? 'on' : ''}">${l}</button>`).join('')}</div>` : ''}
+      <div class="seg" id="filters">${FILTERS.map(([k, l]) => `<button data-f="${k}" class="${state.filter === k ? 'on' : ''}">${l} <span class="mono dim">${n(k)}</span></button>`).join('')}</div>
+    </div>
+    <div class="ai-note">${ICON.spark}<span>Everything was scored and sorted. <b style="color:var(--fg);font-weight:500">${plural(n('portfolio'), 'portfolio pick')}</b> (sharp, clean, high resolution and strong impact) and <b style="color:var(--fg);font-weight:500">${n('stock')} stock-ready</b> (technically clean${videos ? ', steady 1080p+ clips of 5 s or more' : ''}). ${n('review') ? `Check the ${plural(n('review'), 'close call')}; ` : ''}your calls always win.
+      <span class="keys" style="margin-left:6px"><span><kbd>P</kbd> portfolio</span><span><kbd>S</kbd> stock</span><span><kbd>K</kbd> keep</span><span><kbd>X</kbd> reject</span><span><kbd>U</kbd> undo</span><span><kbd>←</kbd><kbd>→</kbd> move</span>${videos ? '<span><kbd>Space</kbd> best moment</span>' : ''}</span></span></div>
     <div class="split"><div class="clips" id="clipGrid"></div><aside class="panel pad detail" id="clipDetail"></aside></div>`;
   $('#shootSel').onchange = (e) => { location.hash = 'review/' + e.target.value; state.sel = 0; };
   $$('#filters button').forEach((b) => (b.onclick = () => { state.filter = b.dataset.f; state.sel = 0; render.review(); }));
+  $$('#mediaSeg button').forEach((b) => (b.onclick = () => { state.media = b.dataset.m; state.sel = 0; render.review(); }));
+  $$('[data-export]', v).forEach((b) => (b.onclick = () => startExport(b.dataset.export, shoot.id)));
   $('#shootName').onclick = () => renameShoot(shoot);
   drawClips();
 };
+
+async function startExport(collection, shootId) {
+  try { await api('/export', { method: 'POST', body: { collection, shoot_id: shootId } }); toast(`Collecting your ${collection === 'stock' ? 'stock' : 'portfolio'} picks into a folder…`); pollJobs(true); }
+  catch (e) { toast(e.message); }
+}
 
 function renameShoot(shoot) {
   const h = $('#shootName');
@@ -220,55 +235,83 @@ function renameShoot(shoot) {
   input.onblur = save;
 }
 
+function useTags(c) {
+  return `${c.portfolio ? '<span class="chip amber">Portfolio</span>' : ''}${c.stock ? '<span class="chip info">Stock</span>' : ''}`;
+}
+
 function drawClips() {
   const list = visible();
   $('#clipGrid').innerHTML = list.map((c, i) => {
     const mark = c.final === 'keep' ? '✓' : c.final === 'reject' ? '✕' : '?';
+    const kindBadge = c.kind === 'photo' ? `${esc(c.codec || 'Photo')}${c.companion ? '+JPG' : ''}` : fmtDur(c.duration);
     return `<button class="clip ${i === state.sel ? 'sel' : ''} ${c.final === 'reject' ? 'rejected' : ''}" data-i="${i}">
-      ${c.status === 'analyzed' ? `<span class="verdict ${c.final} ${c.user_verdict ? 'mine' : ''}" title="${c.user_verdict ? 'Your call' : 'Engine call'}">${mark}</span>` : ''}
+      ${c.status === 'analyzed' ? `<span class="verdict ${c.final} ${c.user_verdict ? 'mine' : ''}" title="${c.user_verdict ? 'Your call' : 'App call'}">${mark}</span>` : ''}
       <div class="frame">${c.thumb ? `<img src="/api/clips/${c.id}/thumb" alt="" loading="lazy">` : `<div class="ph">${c.status === 'error' ? 'Could not analyze' : 'Analyzing…'}</div>`}
-        <span class="badge b-bl">${fmtDur(c.duration)}</span><span class="badge b-tl">${esc((c.camera || '').replace('Sony ', '').replace('DJI ', ''))}</span></div>
+        <span class="badge b-bl">${kindBadge}</span><span class="badge b-tl">${esc((c.camera || '').replace('Sony ', '').replace('DJI ', ''))}</span></div>
       <div class="ln"><span class="mono" style="font-size:11.5px">${esc(c.src_name)}</span>${c.score != null ? `<span class="score ${scoreCls(c.score)}">${c.score}</span>` : ''}</div>
+      <div class="tags">${useTags(c)}</div>
       <div class="why">${esc((c.reasons || [])[0] || c.error || '')}</div></button>`;
-  }).join('') || '<p class="muted">No clips in this group.</p>';
+  }).join('') || '<p class="muted">Nothing in this group.</p>';
   $$('#clipGrid .clip').forEach((b) => (b.onclick = () => { state.sel = +b.dataset.i; drawClips(); }));
   drawDetail();
+}
+
+function useRow(c, key, label) {
+  const notes = (c.uses || {}).notes || {};
+  if (key === 'portfolio' && c.kind === 'video') return '';
+  const mine = (c.user_uses || {})[key];
+  const on = !!c[key];
+  return `<div class="use"><div class="row-sw"><span><b style="font-weight:500">${label}</b> ${mine !== undefined ? `<span class="chip">Your call</span>` : ''}</span>
+      <button class="switch" role="switch" aria-checked="${on}" data-use="${key}" aria-label="${label}"></button></div>
+    <span class="dim" style="font-size:12px">${esc(notes[key] || '')}</span>
+    ${mine !== undefined ? `<button class="linkish" data-reset-use="${key}">Use the app's call</button>` : ''}</div>`;
 }
 
 function drawDetail() {
   const el = $('#clipDetail');
   const c = visible()[state.sel];
-  if (!c) { el.innerHTML = '<p class="muted">Select a clip.</p>'; return; }
+  if (!c) { el.innerHTML = '<p class="muted">Select an item.</p>'; return; }
   const m = c.metrics || {};
   const meta = c.meta || {};
+  const photo = c.kind === 'photo';
   const bar = (label, val) => val == null ? '' : `<div class="bar-row ${val < 50 ? 'badv' : val < 75 ? 'warn' : ''}"><span class="muted">${label}</span><div class="meter"><i style="width:${val}%"></i></div><span class="mono dim">${val}</span></div>`;
   const q = (m.quality_curve || []).map((x) => `<i style="height:${Math.max(4, x * 100)}%"></i>`).join('');
   const dur = c.duration || 1;
-  const exposure = [meta.iso && `ISO ${meta.iso}`, meta.shutter, meta.aperture].filter(Boolean).join(' · ');
+  const exposure = [meta.iso && `ISO ${meta.iso}`, meta.shutter, meta.aperture, meta.focal_mm && `${meta.focal_mm} mm`].filter(Boolean).join(' · ');
+  const pr = (c.uses || {}).print;
+  const media = photo
+    ? `<div class="frame vf photo"><img src="/api/clips/${c.id}/preview" alt="${esc(c.src_name)}"><span class="badge b-tl">${esc(c.codec || '')}${c.companion ? ' + JPG' : ''}</span></div>`
+    : `<div class="frame vf"><video id="vid" preload="metadata" playsinline controls poster="${c.thumb ? `/api/clips/${c.id}/thumb` : ''}" src="/api/clips/${c.id}/video"></video><span class="badge b-tl">${esc(c.color_profile || '')}</span></div>`;
   el.innerHTML = `
-    <div class="frame vf"><video id="vid" preload="metadata" playsinline controls poster="${c.thumb ? `/api/clips/${c.id}/thumb` : ''}" src="/api/clips/${c.id}/video"></video><span class="badge b-tl">${esc(c.color_profile || '')}</span></div>
+    ${media}
     <div class="head"><div class="t"><b class="mono">${esc(c.src_name)}</b><span class="dim" style="font-size:12px">${esc(c.camera)} · ${fmtTime(c.recorded_at)}</span>${c.lat != null ? `<span class="coord">${coord(c.lat, c.lon)}${meta.altitude_m ? ` · ${Math.round(meta.altitude_m)} m up` : ''}</span>` : ''}</div>
       ${c.score != null ? `<span class="score ${scoreCls(c.score)}" style="font-size:13px">${c.score}</span>` : ''}</div>
     ${(c.reasons || []).length ? `<p class="muted" style="font-size:13px">${esc(c.reasons.join('. '))}.</p>` : ''}
-    ${c.best_end ? `<div class="stack" style="gap:6px"><div class="row-sw"><span class="eyebrow">Best moment · ${fmtDur(c.best_start)}–${fmtDur(c.best_end)}</span><button class="btn sm" id="playBest">▶ Play it</button></div>
+    ${c.status === 'analyzed' ? `<div class="uses">${useRow(c, 'portfolio', 'Portfolio &amp; print')}${useRow(c, 'stock', 'Stock')}</div>` : ''}
+    ${!photo && c.best_end ? `<div class="stack" style="gap:6px"><div class="row-sw"><span class="eyebrow">Best moment · ${fmtDur(c.best_start)}–${fmtDur(c.best_end)}</span><button class="btn sm" id="playBest">▶ Play it</button></div>
       <div class="moment" id="moment" title="Click to jump"><div class="q">${q}</div><div class="win" style="left:${pct((c.best_start / dur) * 100)};width:${pct(((c.best_end - c.best_start) / dur) * 100)}"></div><div class="head-pos" id="headPos" style="left:0"></div></div></div>` : ''}
-    <div class="bars">${bar('Steadiness', m.steady)}${bar('Focus', m.focus)}${bar('Light', m.light)}</div>
+    <div class="bars">${photo ? bar('Focus', m.focus) + bar('Light', m.light) + bar('Noise', m.noise) + bar('Impact', m.impact) : bar('Steadiness', m.steady) + bar('Focus', m.focus) + bar('Light', m.light)}</div>
     <dl class="kv">
-      <dt>Format</dt><dd>${c.width ? `${c.width}×${c.height}` : '–'}${c.fps ? ` · ${c.fps}p` : ''}</dd>
-      <dt>Codec</dt><dd>${esc(c.codec || '–')}${c.bit_depth ? ` · ${c.bit_depth}-bit` : ''}</dd>
+      <dt>${photo ? 'Size' : 'Format'}</dt><dd>${c.width ? `${c.width}×${c.height}` : '–'}${photo && c.megapixels ? ` · ${c.megapixels} MP` : ''}${c.fps ? ` · ${c.fps}p` : ''}</dd>
+      ${photo ? '' : `<dt>Codec</dt><dd>${esc(c.codec || '–')}${c.bit_depth ? ` · ${c.bit_depth}-bit` : ''}</dd>`}
       <dt>Color</dt><dd>${esc(c.color_profile || '–')}${meta.gamut ? ` · ${esc(meta.gamut)}` : ''}</dd>
       ${meta.lens ? `<dt>Lens</dt><dd>${esc(meta.lens)}</dd>` : ''}
       ${exposure ? `<dt>Exposure</dt><dd>${esc(exposure)}</dd>` : ''}
-      <dt>Length</dt><dd>${fmtDur(c.duration)}</dd>
-      ${c.similar_to ? `<dt>Duplicate of</dt><dd>${esc(state.clips.find((x) => x.id === c.similar_to)?.src_name || '#' + c.similar_to)}</dd>` : ''}
+      ${photo && pr ? `<dt>Print</dt><dd>${pr.in_300[0]}×${pr.in_300[1]} in @300 dpi</dd>` : ''}
+      ${photo && m.tilt_deg != null && Math.abs(m.tilt_deg) >= 0.8 ? `<dt>Horizon</dt><dd>tilted ${Math.abs(m.tilt_deg).toFixed(1)}°</dd>` : ''}
+      ${photo ? '' : `<dt>Length</dt><dd>${fmtDur(c.duration)}</dd>`}
+      ${c.similar_to ? `<dt>Better ${photo ? 'frame' : 'take'}</dt><dd>${esc(state.clips.find((x) => x.id === c.similar_to)?.src_name || '#' + c.similar_to)}</dd>` : ''}
     </dl>
     <div style="display:flex;gap:8px"><button class="btn" style="flex:1;justify-content:center" id="dX">✕ Reject <kbd>X</kbd></button><button class="btn primary" style="flex:1;justify-content:center" id="dK">✓ Keep <kbd>K</kbd></button></div>
-    <div class="row-sw"><button class="btn ghost sm" id="dU" ${c.user_verdict ? '' : 'disabled'}>Use the engine's call</button><button class="btn ghost sm" id="reveal">Show file</button></div>`;
+    <div class="row-sw"><button class="btn ghost sm" id="dU" ${c.user_verdict ? '' : 'disabled'}>Use the app's call</button><button class="btn ghost sm" id="reveal">Show file</button></div>`;
   $('#dK').onclick = () => setVerdict('keep');
   $('#dX').onclick = () => setVerdict('reject');
   $('#dU').onclick = () => setVerdict(null);
   $('#reveal').onclick = () => api(`/clips/${c.id}/reveal`, { method: 'POST' }).catch((e) => toast(e.message));
+  $$('[data-use]', el).forEach((b) => (b.onclick = () => setUse(b.dataset.use, b.getAttribute('aria-checked') !== 'true')));
+  $$('[data-reset-use]', el).forEach((b) => (b.onclick = () => setUse(b.dataset.resetUse, null)));
   const vid = $('#vid');
+  if (!vid) return;
   vid.onerror = () => toast('This clip can’t play in the browser yet. Turn on preview files in Settings.');
   if ($('#playBest')) {
     $('#playBest').onclick = () => playBest(c);
@@ -289,15 +332,34 @@ async function setVerdict(verdict) {
   if (state.filter !== 'all') render.review(); else drawClips();
   refreshShoots();
 }
+
+async function setUse(collection, value) {
+  const c = visible()[state.sel];
+  if (!c || c.status !== 'analyzed' || (collection === 'portfolio' && c.kind === 'video')) return;
+  try {
+    await api(`/clips/${c.id}/uses`, { method: 'POST', body: { collection, value } });
+    c.user_uses = { ...(c.user_uses || {}) };
+    if (value === null) delete c.user_uses[collection]; else c.user_uses[collection] = value;
+    c[collection] = value === null ? !!(c.uses || {})[collection] : value;
+    const label = collection === 'stock' ? 'Stock' : 'Portfolio';
+    toast(value === null ? `${label}: back to the app's call` : value ? `Added to ${label}` : `Removed from ${label}`);
+    await refreshShoots();
+    if (state.filter === collection) render.review(); else drawClips();
+  } catch (e) { toast(e.message); }
+}
+
 addEventListener('keydown', (e) => {
   if (current() !== 'review' || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || $('.modal-bg')) return;
   const k = e.key.toLowerCase();
+  const c = visible()[state.sel];
   if (k === 'k') setVerdict('keep');
   else if (k === 'x') setVerdict('reject');
   else if (k === 'u') setVerdict(null);
+  else if (k === 's' && c) setUse('stock', !c.stock);
+  else if (k === 'p' && c) setUse('portfolio', !c.portfolio);
   else if (e.key === 'ArrowRight') { state.sel = Math.min(visible().length - 1, state.sel + 1); drawClips(); }
   else if (e.key === 'ArrowLeft') { state.sel = Math.max(0, state.sel - 1); drawClips(); }
-  else if (e.code === 'Space' && e.target.tagName !== 'VIDEO') { e.preventDefault(); const c = visible()[state.sel]; if (c) playBest(c); }
+  else if (e.code === 'Space' && e.target.tagName !== 'VIDEO') { e.preventDefault(); if (c && c.kind === 'video') playBest(c); }
 });
 
 // ------------------------------------------------------------ music
@@ -375,7 +437,11 @@ render.settings = () => {
       <div class="sep"></div>
       ${sw('swVerify', c.verify_copies, 'Verify every copy', 'Re-reads each copied file and compares it with the card. Slower, but you can trust the backup.')}
       ${sw('swProxy', c.make_proxies, 'Make preview files', 'Small 540p copies for smooth playback while reviewing. Uses your NVIDIA GPU when available.')}
+      ${sw('swAuto', c.auto_import, 'Import automatically', 'Start importing, analyzing and sorting as soon as a card with new files is plugged in.')}
       <div class="field"><label for="gap">Start a new shoot after a break of (hours)</label><input class="input" id="gap" type="number" min="1" max="72" step="1" value="${c.shoot_gap_hours ?? 6}" style="max-width:120px"></div>
+      <div class="sep"></div>
+      <div class="field"><label for="share">Portfolio picks: share of each shoot's best photos (percent)</label><input class="input" id="share" type="number" min="2" max="50" step="1" value="${Math.round((c.portfolio_share ?? 0.15) * 100)}" style="max-width:120px"></div>
+      <div class="field"><label for="colRoot">Collections folder: where Stock and Portfolio exports go</label><div class="row-in"><input class="input mono" id="colRoot" value="${esc(c.collections_root)}" placeholder="${esc((c.library_root || '') + (/\\/.test(c.library_root || '') ? '\\' : '/') + 'Collections')}"><button class="btn" data-browse="colRoot">Browse…</button></div></div>
       <div><button class="btn primary" id="saveSettings">Save settings</button></div>
     </div>
     <div class="panel pad stack" style="max-width:760px"><h2>System</h2>
@@ -387,7 +453,7 @@ render.settings = () => {
   $$('[data-browse]', v).forEach((b) => (b.onclick = async () => { const p = await pickFolder('Choose a folder'); if (p) $('#' + b.dataset.browse).value = p; }));
   $('#saveSettings').onclick = async () => {
     try {
-      await api('/config', { method: 'PUT', body: { library_root: $('#libRoot').value.trim(), backup_root: $('#bakRoot').value.trim(), verify_copies: $('#swVerify').getAttribute('aria-checked') === 'true', make_proxies: $('#swProxy').getAttribute('aria-checked') === 'true', shoot_gap_hours: +$('#gap').value || 6 } });
+      await api('/config', { method: 'PUT', body: { library_root: $('#libRoot').value.trim(), backup_root: $('#bakRoot').value.trim(), verify_copies: $('#swVerify').getAttribute('aria-checked') === 'true', make_proxies: $('#swProxy').getAttribute('aria-checked') === 'true', auto_import: $('#swAuto').getAttribute('aria-checked') === 'true', shoot_gap_hours: +$('#gap').value || 6, portfolio_share: (+$('#share').value || 15) / 100, collections_root: $('#colRoot').value.trim() } });
       await refreshStatus(); toast('Settings saved');
     } catch (e) { toast(e.message); }
   };

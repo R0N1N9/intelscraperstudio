@@ -190,11 +190,97 @@ def parse_dji_srt(srt_path: Path, max_bytes: int = 200_000) -> dict:
     return out
 
 
+RAW_EXT = {".arw", ".dng", ".cr2", ".cr3", ".nef", ".raf", ".orf", ".rw2"}
+
+CAMERA_MODELS = {**SONY_MODELS, "L2D-20C": "DJI Mavic 3", "FC3411": "DJI Air 2S", "FC3582": "DJI Mini 3 Pro",
+                 "FC4382": "DJI Air 3", "L1D-20C": "DJI Mavic 2 Pro"}
+
+
+def _ratio(v) -> float | None:
+    """EXIF numbers arrive as rationals (1/250) or plain numbers, sometimes wrapped in a list."""
+    try:
+        x = v.values if hasattr(v, "values") else v
+        while isinstance(x, (list, tuple)):
+            x = x[0]
+        return float(x.num) / float(x.den) if hasattr(x, "num") else float(x)
+    except (ZeroDivisionError, TypeError, ValueError, IndexError):
+        return None
+
+
+def _gps(tags: dict, key: str, ref_key: str) -> float | None:
+    v = tags.get(key)
+    if not v:
+        return None
+    try:
+        d, m, sec = (float(x.num) / float(x.den) for x in v.values)
+    except (ZeroDivisionError, TypeError, ValueError, AttributeError):
+        return None
+    val = d + m / 60 + sec / 3600
+    ref = str(tags.get(ref_key, "")).strip().upper()
+    if val == 0:
+        return None
+    return round(-val if ref in ("S", "W") else val, 6)
+
+
+def photo_exif(path: Path) -> dict:
+    """Camera, lens, exposure, capture time and GPS from a photo's EXIF (JPEG, ARW, DNG, ...)."""
+    import exifread
+    out: dict = {"meta": {}}
+    try:
+        with open(path, "rb") as f:
+            tags = exifread.process_file(f, details=False)
+    except Exception:
+        return out
+    t = {k: tags[k] for k in tags}
+    model = str(t.get("Image Model", "")).strip()
+    make = str(t.get("Image Make", "")).strip()
+    if model:
+        out["camera"] = CAMERA_MODELS.get(model.upper(), CAMERA_MODELS.get(model, f"{make.title()} {model}".strip()))
+        out["meta"]["model_code"] = model
+    lens = str(t.get("EXIF LensModel", "")).strip()
+    if lens:
+        out["meta"]["lens"] = lens
+    iso = t.get("EXIF ISOSpeedRatings") or t.get("EXIF PhotographicSensitivity")
+    if iso:
+        out["meta"]["iso"] = str(iso).split(",")[0].strip("[] ")
+    et = _ratio(t.get("EXIF ExposureTime"))
+    if et:
+        out["meta"]["shutter"] = f"1/{round(1 / et)}" if et < 1 else f"{et:g}s"
+    fn = _ratio(t.get("EXIF FNumber"))
+    if fn:
+        out["meta"]["aperture"] = f"f/{fn:.1f}"
+    fl = _ratio(t.get("EXIF FocalLength"))
+    if fl:
+        out["meta"]["focal_mm"] = round(fl)
+    dto = str(t.get("EXIF DateTimeOriginal", "") or t.get("Image DateTime", "")).strip()
+    if dto:
+        off = str(t.get("EXIF OffsetTimeOriginal", "")).strip()
+        try:
+            dt = datetime.strptime(dto[:19], "%Y:%m:%d %H:%M:%S")
+            out["recorded_at"] = dt.isoformat() + (off if re.match(r"^[+-]\d{2}:\d{2}$", off) else "")
+        except ValueError:
+            pass
+    lat = _gps(t, "GPS GPSLatitude", "GPS GPSLatitudeRef")
+    lon = _gps(t, "GPS GPSLongitude", "GPS GPSLongitudeRef")
+    if lat is not None and lon is not None:
+        out["lat"], out["lon"] = lat, lon
+    w = t.get("EXIF ExifImageWidth")
+    h = t.get("EXIF ExifImageLength")
+    try:
+        if w and h:
+            out["width"], out["height"] = int(str(w)), int(str(h))
+    except ValueError:
+        pass
+    return out
+
+
 def inspect(path: Path) -> dict:
     """Everything we can learn about a media file without decoding it."""
     path = Path(path)
     ext = path.suffix.lower()
-    info: dict = {"kind": "video" if ext in VIDEO_EXT else "photo", "meta": {}}
+    if ext in PHOTO_EXT:
+        return inspect_photo(path)
+    info: dict = {"kind": "video", "meta": {}}
     try:
         probe = ffprobe(path)
     except Exception as e:  # unreadable or unsupported: still importable as a plain file
@@ -251,6 +337,41 @@ def inspect(path: Path) -> dict:
     info.setdefault("color_profile", "Standard")
     if not info.get("recorded_at"):
         info["recorded_at"] = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).astimezone().isoformat(timespec="seconds")
+    return info
+
+
+def inspect_photo(path: Path) -> dict:
+    info: dict = {"kind": "photo", "meta": {}, "codec": path.suffix.lower().lstrip(".").upper()}
+    ex = photo_exif(path)
+    info["meta"].update(ex.pop("meta", {}))
+    info.update(ex)
+    if path.suffix.lower() in RAW_EXT:
+        info["meta"]["raw"] = True
+        try:  # true sensor size; EXIF width on RAW files often describes the preview
+            import rawpy
+            with rawpy.imread(str(path)) as raw:
+                info["width"], info["height"] = raw.sizes.width, raw.sizes.height
+                if raw.sizes.flip in (5, 6):
+                    info["width"], info["height"] = info["height"], info["width"]
+        except Exception as e:
+            info["meta"]["raw_error"] = str(e)[:200]
+    if not info.get("width"):
+        try:
+            from PIL import Image
+            with Image.open(path) as im:
+                info["width"], info["height"] = im.size
+        except Exception:
+            pass
+    if info.get("width") and info.get("height"):
+        info["megapixels"] = round(info["width"] * info["height"] / 1e6, 1)
+    if path.name.upper().startswith("DJI_") and not info.get("camera"):
+        info["camera"] = "DJI Mavic 3"
+    info.setdefault("camera", "Unknown camera")
+    info.setdefault("color_profile", "RAW" if info["meta"].get("raw") else "Standard")
+    info["duration"] = None
+    if not info.get("recorded_at"):
+        info["recorded_at"] = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).astimezone().isoformat(timespec="seconds")
+        info["meta"]["time_from_file"] = True
     return info
 
 

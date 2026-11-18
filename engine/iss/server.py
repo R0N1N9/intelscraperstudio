@@ -9,6 +9,8 @@ import shutil
 import string
 import subprocess
 import sys
+import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -17,14 +19,54 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, analyze, config, db, ingest, jobs, media, music
+from . import __version__, analyze, config, db, ingest, jobs, media, music, sorting
 
 WEB = Path(__file__).resolve().parents[2] / "web"
+
+_active_imports: set[str] = set()
+_leftover: dict[str, int] = {}  # files still "new" after an import (exact duplicates under another name)
+_stop = threading.Event()
+
+
+def _import_job(src: Path) -> dict:
+    key = str(src)
+    _active_imports.add(key)
+
+    def work(progress):
+        try:
+            res = ingest.import_source(src, progress)
+            res["analysis"] = analyze.analyze_many(res["clip_ids"], progress)
+            return res
+        finally:
+            try:
+                _leftover[key] = ingest.describe_source(src)["new_files"]
+            except Exception:
+                pass
+            _active_imports.discard(key)
+
+    return jobs.submit("import", f"Importing {src.name or src}", work)
+
+
+def _watch_cards() -> None:
+    """With auto-import on, a card with new files starts importing as soon as it's plugged in."""
+    while not _stop.wait(5):
+        try:
+            if not config.load().get("auto_import"):
+                continue
+            for src in ingest.find_sources():
+                if src["new_files"] > _leftover.get(src["path"], 0) and src["path"] not in _active_imports:
+                    _import_job(Path(src["path"]))
+        except Exception:
+            pass
+
 
 @asynccontextmanager
 async def _lifespan(_app):
     db.init()
+    _stop.clear()
+    threading.Thread(target=_watch_cards, daemon=True, name="card-watcher").start()
     yield
+    _stop.set()
 
 
 app = FastAPI(title="intelscraperstudio", version=__version__, lifespan=_lifespan)
@@ -73,11 +115,23 @@ class Settings(BaseModel):
     verify_copies: bool | None = None
     make_proxies: bool | None = None
     shoot_gap_hours: float | None = None
+    auto_import: bool | None = None
+    portfolio_share: float | None = None
+    collections_root: str | None = None
 
 
 @app.put("/api/config")
 def put_config(s: Settings):
-    return config.save({k: v for k, v in s.model_dump().items() if v is not None})
+    vals = {k: v for k, v in s.model_dump().items() if v is not None}
+    if "portfolio_share" in vals:
+        vals["portfolio_share"] = min(0.5, max(0.02, vals["portfolio_share"]))
+    cfg = config.save(vals)
+    if "portfolio_share" in vals:  # re-rank existing shoots with the new share
+        with db.session() as con:
+            ids = [r[0] for r in con.execute("SELECT id FROM shoots")]
+        for sid in ids:
+            sorting.classify_shoot(sid)
+    return cfg
 
 
 # ---------------------------------------------------------------- folders
@@ -128,12 +182,9 @@ def start_import(body: PathIn):
     if not src.is_dir():
         raise HTTPException(400, f"Folder not found: {body.path}")
 
-    def work(progress):
-        res = ingest.import_source(src, progress)
-        res["analysis"] = analyze.analyze_many(res["clip_ids"], progress)
-        return res
-
-    return jobs.submit("import", f"Importing {src.name or src}", work)
+    if str(src) in _active_imports:
+        raise HTTPException(409, "That folder is already being imported.")
+    return _import_job(src)
 
 
 @app.post("/api/music/import")
@@ -171,18 +222,22 @@ def list_shoots():
     with db.session() as con:
         shoots = db.rows(con.execute("SELECT * FROM shoots ORDER BY started_at DESC"))
         for s in shoots:
-            cs = db.rows(con.execute("SELECT id, kind, camera, duration, score, verdict, user_verdict, status, thumb "
-                                     "FROM clips WHERE shoot_id=?", (s["id"],)))
+            cs = db.rows(con.execute("SELECT id, kind, camera, duration, score, verdict, user_verdict, status, thumb, "
+                                     "uses, user_uses FROM clips WHERE shoot_id=? AND companion_of IS NULL", (s["id"],)))
             vids = [c for c in cs if c["kind"] == "video"]
             s["clips"] = len(vids)
             s["photos"] = len(cs) - len(vids)
             s["cameras"] = sorted({c["camera"] for c in cs})
-            s["keep"] = sum(1 for c in vids if _eff(c) == "keep")
-            s["review"] = sum(1 for c in vids if _eff(c) == "review")
-            s["reject"] = sum(1 for c in vids if _eff(c) == "reject")
-            s["pending"] = sum(1 for c in vids if c["status"] in ("imported", "analyzing"))
+            s["keep"] = sum(1 for c in cs if _eff(c) == "keep")
+            s["review"] = sum(1 for c in cs if _eff(c) == "review")
+            s["reject"] = sum(1 for c in cs if _eff(c) == "reject")
+            s["pending"] = sum(1 for c in cs if c["status"] in ("imported", "analyzing"))
             s["minutes"] = round(sum(c["duration"] or 0 for c in vids) / 60, 1)
-            best = max((c for c in vids if c["thumb"]), key=lambda c: c["score"] or 0, default=None)
+            eff = [sorting.effective(c) for c in cs]
+            s["stock"] = sum(1 for e in eff if e["stock"])
+            s["portfolio"] = sum(1 for e in eff if e["portfolio"])
+            best = max((c for c in cs if c["thumb"]), key=lambda c: (c["score"] or 0) + 0.3 * (1 if c["kind"] == "photo" else 0),
+                       default=None)
             s["cover"] = best["id"] if best else None
     return shoots
 
@@ -202,10 +257,17 @@ def rename_shoot(sid: int, body: ShootIn):
 def shoot_clips(sid: int):
     with db.session() as con:
         cs = db.rows(con.execute("SELECT * FROM clips WHERE shoot_id=? ORDER BY recorded_at", (sid,)))
+    pairs = {c["companion_of"]: c["src_name"] for c in cs if c["companion_of"]}
+    out = []
     for c in cs:
+        if c["companion_of"]:
+            continue
         c["final"] = _eff(c)
+        c.update(sorting.effective(c))
+        c["companion"] = pairs.get(c["id"])
         c.pop("hash", None)
-    return cs
+        out.append(c)
+    return out
 
 
 class VerdictIn(BaseModel):
@@ -219,6 +281,51 @@ def set_verdict(cid: int, body: VerdictIn):
     with db.session() as con:
         con.execute("UPDATE clips SET user_verdict=? WHERE id=?", (body.verdict, cid))
     return {"ok": True}
+
+
+class UseIn(BaseModel):
+    collection: str          # stock | portfolio
+    value: bool | None       # True / False to overrule the app, None to go back to its call
+
+
+@app.post("/api/clips/{cid}/uses")
+def set_use(cid: int, body: UseIn):
+    if body.collection not in sorting.COLLECTIONS:
+        raise HTTPException(400, "collection must be stock or portfolio")
+    with db.session() as con:
+        r = db.row(con.execute("SELECT user_uses FROM clips WHERE id=?", (cid,)).fetchone())
+        if not r:
+            raise HTTPException(404, "No such item")
+        mine = r["user_uses"] or {}
+        if body.value is None:
+            mine.pop(body.collection, None)
+        else:
+            mine[body.collection] = body.value
+        con.execute("UPDATE clips SET user_uses=? WHERE id=?", (db.dumps(mine) if mine else None, cid))
+    return {"ok": True}
+
+
+class ExportIn(BaseModel):
+    collection: str
+    shoot_id: int | None = None
+
+
+@app.post("/api/export")
+def export(body: ExportIn):
+    if body.collection not in sorting.COLLECTIONS:
+        raise HTTPException(400, "collection must be stock or portfolio")
+    title = f"Exporting {sorting.COLLECTIONS[body.collection]}"
+    return jobs.submit("export", title, lambda p: sorting.export_collection(body.collection, body.shoot_id, p))
+
+
+@app.get("/api/collections")
+def collections():
+    with db.session() as con:
+        cs = db.rows(con.execute("SELECT uses, user_uses FROM clips WHERE companion_of IS NULL AND uses IS NOT NULL"))
+    eff = [sorting.effective(c) for c in cs]
+    root = sorting.collections_root()
+    return {k: {"name": n, "count": sum(1 for e in eff if e[k]), "folder": str(root / n.replace(" & ", " and "))}
+            for k, n in sorting.COLLECTIONS.items()}
 
 
 def _clip_file(cid: int, field: str) -> Path:
@@ -240,6 +347,16 @@ def video(cid: int):
         return FileResponse(_clip_file(cid, "proxy"), media_type="video/mp4")
     except HTTPException:
         return FileResponse(_clip_file(cid, "path"), media_type="video/mp4")
+
+
+@app.get("/api/clips/{cid}/preview")
+def preview(cid: int):
+    """Large JPEG for photos, 540p MP4 for clips."""
+    try:
+        p = _clip_file(cid, "proxy")
+    except HTTPException:
+        p = _clip_file(cid, "path")
+    return FileResponse(p, media_type="image/jpeg" if p.suffix.lower() in (".jpg", ".jpeg") else "video/mp4")
 
 
 @app.post("/api/clips/{cid}/reveal")

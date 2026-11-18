@@ -74,7 +74,17 @@ CREATE TABLE IF NOT EXISTS tracks (
 );
 """
 
-JSON_FIELDS = {"meta", "reasons", "metrics", "beats", "energy", "sections", "vibe_scores", "features"}
+JSON_FIELDS = {"meta", "reasons", "metrics", "beats", "energy", "sections", "vibe_scores", "features", "uses", "user_uses"}
+
+# Columns added after the first release; added in place on older catalogs.
+MIGRATIONS = {
+    "clips": [
+        ("uses", "TEXT"),          # JSON {"stock": bool, "portfolio": bool, "notes": {...}, "print": {...}}
+        ("user_uses", "TEXT"),     # JSON overrides, e.g. {"portfolio": true}
+        ("companion_of", "INTEGER"),  # JPEG half of a RAW+JPEG pair points at the RAW
+        ("megapixels", "REAL"),
+    ],
+}
 
 
 def db_path():
@@ -102,6 +112,11 @@ def session():
 def init() -> None:
     with session() as con:
         con.executescript(SCHEMA)
+        for table, cols in MIGRATIONS.items():
+            have = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+            for name, typ in cols:
+                if name not in have:
+                    con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {typ}")
 
 
 def row(r: sqlite3.Row | None) -> dict | None:
