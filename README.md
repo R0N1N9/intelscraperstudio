@@ -1,4 +1,10 @@
-# intelscraperstudio
+<p align="center"><img src="web/icon.svg" width="120" alt="intelscraperstudio logo"></p>
+
+<h1 align="center">intelscraperstudio</h1>
+
+<p align="center"><b>A local studio app for photographers and videographers</b>: import and back up camera cards, score every clip, analyse your music library, and (next) cut edits to it.</p>
+
+<p align="center"><img src="docs/screenshots/review-clips.png" alt="Review clips screen: a scored shoot with keep / reject verdicts and the clip detail panel" width="900"></p>
 
 A personal studio app for photographers and videographers. You shoot, then drop in the raw
 footage. It imports and backs up your cards, scores every clip, learns your music library, and
@@ -50,6 +56,19 @@ From those scores, each clip is:
 - sections (Intro, Verse, Build, Chorus, Drop, Bridge, Outro);
 - an estimated vibe (Cinematic, Energetic, Chill, Dreamy, Nostalgic, Adventure) that you can change.
 
+## Screenshots
+
+| | |
+|---|---|
+| <img src="docs/screenshots/studio-home.png" alt="Studio home screen"> | <img src="docs/screenshots/music-library.png" alt="Music library"> |
+| **Studio**: card watcher, import buttons, music vibe counts and the imported shoot (8 clips from an A7C and a Mavic 3 card). | **Music library**: tempo, vibe and the section/energy strip for each analysed song. |
+| <img src="docs/screenshots/design-mockup.png" alt="Design mockup of the full app"> | |
+| **Design mockup** (`docs/design/mockup.html`, sample data): the planned processing pipeline and later steps. Not built yet. | |
+
+The app screenshots use synthetic footage and songs made with the test suite's FFmpeg helpers
+(`engine/tests/conftest.py`): steady, shaky, blurry, accidental and near-duplicate clips with Sony XML and DJI SRT sidecars.
+This is why the hero shows a fractal test scene rather than real footage.
+
 ## Run it on Windows
 
 1. Install **Python 3.11+** from <https://www.python.org/downloads/>. Tick *Add python.exe to PATH*.
@@ -73,13 +92,24 @@ python -m iss import "E:\"
 python -m iss music "C:\Users\you\Music\Edit songs"
 ```
 
+## Run it on macOS / Linux
+
+Install Python 3.11+ and FFmpeg (macOS: `brew install ffmpeg`), then from the repo folder:
+
+```bash
+./run.sh
+```
+
+The first run creates `.venv` and installs `requirements.txt`. The app then serves on <http://127.0.0.1:8765>.
+`run.sh` passes extra flags through to `python -m iss serve`, which accepts `--port` and `--no-browser`.
+
 ## Where things are stored
 
 | What | Where |
 |---|---|
 | Imported footage (+ sidecars) | Library folder → `YYYY/YYYY-MM-DD/<camera>/` |
 | Backup copy | Backup folder, same layout |
-| Catalog, thumbnails, preview files | `%USERPROFILE%\.intelscraperstudio\` |
+| Catalog, thumbnails, preview files | `%USERPROFILE%\.intelscraperstudio\` (`~/.intelscraperstudio/` on macOS/Linux; override with `ISS_HOME`) |
 | Settings | `%USERPROFILE%\.intelscraperstudio\config.json` |
 
 ## Development
@@ -101,6 +131,8 @@ accidental and near-duplicate clips, plus Sony XML and DJI SRT sidecars. They al
 songs at known tempos. That way the import, scoring and music analysis are checked against
 known answers.
 
+## Structure
+
 ```
 engine/iss/
   media.py     metadata: ffprobe + Sony XML + DJI SRT
@@ -110,4 +142,7 @@ engine/iss/
   server.py    local API (FastAPI) + serves the UI
 web/           the interface (no build step)
 docs/design/   clickable mockup of the full app
+docs/PLAN.md   the build plan
+docs/screenshots/  README images
+run.bat / run.sh   launchers (Windows / macOS + Linux)
 ```
